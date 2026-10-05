@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+
+	"github.com/go-chi/cors"
 )
 
 func TestSupabaseRequestUsesServerKeyAndQuery(t *testing.T) {
@@ -92,4 +95,32 @@ func TestSendSheetVoteOnlyIncludesCandidateAndSecret(t *testing.T) {
 	t.Setenv("SHEET_SECRET", "sheet-secret-value")
 	store := &supabaseStore{client: server.Client()}
 	store.sendSheetVote("Kandidat Satu")
+}
+
+func TestProductionFrontendOriginPassesCORSPreflight(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGIN", "http://localhost:3000")
+	handler := cors.Handler(cors.Options{
+		AllowedOrigins: allowedOrigins(),
+		AllowedMethods: []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Authorization", "Content-Type"},
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	request := httptest.NewRequest(http.MethodOptions, "/api/login", nil)
+	request.Header.Set("Origin", "https://pemilu-sman55.vercel.app")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	request.Header.Set("Access-Control-Request-Headers", "authorization,content-type")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "https://pemilu-sman55.vercel.app" {
+		t.Fatalf("allow origin = %q, want production frontend origin", got)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, http.MethodPost) {
+		t.Fatalf("allow methods = %q, want POST", got)
+	}
+	if got := strings.ToLower(response.Header().Get("Access-Control-Allow-Headers")); !strings.Contains(got, "authorization") || !strings.Contains(got, "content-type") {
+		t.Fatalf("allow headers = %q, want authorization and content-type", got)
+	}
 }

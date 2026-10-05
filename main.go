@@ -67,6 +67,26 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+func allowedOrigins() []string {
+	configured := strings.Split(
+		env("ALLOWED_ORIGIN", "http://localhost:3000,https://pemilu-sman55.vercel.app"),
+		",",
+	)
+	origins := make([]string, 0, len(configured)+1)
+	seen := make(map[string]bool, len(configured)+1)
+	for _, origin := range configured {
+		origin = strings.TrimSpace(origin)
+		if origin != "" && !seen[origin] {
+			origins = append(origins, origin)
+			seen[origin] = true
+		}
+	}
+	if !seen["https://pemilu-sman55.vercel.app"] {
+		origins = append(origins, "https://pemilu-sman55.vercel.app")
+	}
+	return origins
+}
+
 func token() (string, error) {
 	value := make([]byte, 24)
 	if _, err := io.ReadFull(rand.Reader, value); err != nil {
@@ -227,14 +247,10 @@ func main() {
 	cancelStartup()
 	log.Println("Supabase REST aktif; service_role hanya digunakan server-side")
 
-	origins := strings.Split(env("ALLOWED_ORIGIN", "http://localhost:3000"), ",")
-	for i := range origins {
-		origins[i] = strings.TrimSpace(origins[i])
-	}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.Logger, middleware.Recoverer, middleware.Timeout(30*time.Second))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: origins,
+		AllowedOrigins: allowedOrigins(),
 		AllowedMethods: []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"Authorization", "Content-Type"},
 	}))
