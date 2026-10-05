@@ -37,11 +37,21 @@ func loadDotEnv() {
 
 // validateEnv menolak start jika konfigurasi rahasia tidak aman.
 func validateEnv() {
+	if strings.TrimSpace(os.Getenv("SUPABASE_URL")) == "" {
+		log.Fatal("SUPABASE_URL wajib diisi. Lihat .env.example")
+	}
+	if strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY")) == "" {
+		log.Fatal("SUPABASE_SERVICE_ROLE_KEY wajib diisi dan hanya disimpan di backend. Lihat .env.example")
+	}
 	if len(os.Getenv("ADMIN_PASSWORD")) < 10 {
 		log.Fatal("ADMIN_PASSWORD wajib diisi (minimal 10 karakter). Lihat .env.example")
 	}
-	if os.Getenv("SHEET_URL") != "" && len(os.Getenv("SHEET_SECRET")) < 16 {
-		log.Fatal("SHEET_SECRET wajib diisi (minimal 16 karakter) jika SHEET_URL dipakai")
+	sheetURL, sheetSecret := strings.TrimSpace(os.Getenv("SHEET_URL")), os.Getenv("SHEET_SECRET")
+	if (sheetURL == "") != (strings.TrimSpace(sheetSecret) == "") {
+		log.Fatal("SHEET_URL dan SHEET_SECRET harus diisi bersama atau sama-sama dikosongkan")
+	}
+	if sheetURL != "" && len(sheetSecret) < 16 {
+		log.Fatal("SHEET_SECRET wajib memiliki minimal 16 karakter")
 	}
 }
 
