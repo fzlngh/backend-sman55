@@ -93,6 +93,29 @@ func (s *supabaseStore) decode(ctx context.Context, method, path string, query u
 	return nil
 }
 
+// uploadObject menyimpan file ke bucket Supabase Storage (publik) dan mengembalikan URL publiknya.
+func (s *supabaseStore) uploadObject(ctx context.Context, bucket, name, contentType string, data []byte) (string, error) {
+	endpoint := s.baseURL + "/storage/v1/object/" + bucket + "/" + name
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("gagal membuat permintaan upload: %w", err)
+	}
+	req.Header.Set("apikey", s.key)
+	req.Header.Set("Authorization", "Bearer "+s.key)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Cache-Control", "max-age=31536000")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("upload ke Supabase Storage gagal: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", &supabaseError{status: resp.StatusCode, body: string(body)}
+	}
+	return s.baseURL + "/storage/v1/object/public/" + bucket + "/" + name, nil
+}
+
 func (s *supabaseStore) sendSheetVote(candidate string) {
 	sheetURL := os.Getenv("SHEET_URL")
 	if sheetURL == "" {

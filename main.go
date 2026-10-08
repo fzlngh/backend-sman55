@@ -34,10 +34,11 @@ type Voter struct {
 }
 
 type Candidate struct {
-	ID     int64  `json:"id,omitempty"`
-	Number int    `json:"number"`
-	Name   string `json:"name"`
-	Vision string `json:"vision"`
+	ID       int64  `json:"id,omitempty"`
+	Number   int    `json:"number"`
+	Name     string `json:"name"`
+	Vision   string `json:"vision"`
+	PhotoURL string `json:"photo_url"`
 }
 
 type Result struct {
@@ -57,7 +58,7 @@ var (
 	mu       sync.Mutex
 	sessions = map[string]string{}
 	admins   = map[string]time.Time{}
-	nisnRe   = regexp.MustCompile(`^\d{10}$`)
+	nisnRe   = regexp.MustCompile(`^\d{9,12}$`)
 )
 
 func env(key, fallback string) string {
@@ -161,7 +162,7 @@ func adminAuth(next http.Handler) http.Handler {
 
 func listCandidates(ctx context.Context) ([]Candidate, error) {
 	query := url.Values{
-		"select": {"id,number,name,vision"},
+		"select": {"id,number,name,vision,photo_url"},
 		"order":  {"number.asc,id.asc"},
 	}
 	candidates := make([]Candidate, 0)
@@ -171,7 +172,7 @@ func listCandidates(ctx context.Context) ([]Candidate, error) {
 
 func getCandidate(ctx context.Context, id int64) (Candidate, error) {
 	query := url.Values{
-		"select": {"id,number,name,vision"},
+		"select": {"id,number,name,vision,photo_url"},
 		"id":     {"eq." + strconv.FormatInt(id, 10)},
 		"limit":  {"1"},
 	}
@@ -282,7 +283,7 @@ func main() {
 				return
 			}
 			if !nisnRe.MatchString(in.NISN) {
-				fail(w, http.StatusBadRequest, "NISN harus terdiri dari 10 digit")
+				fail(w, http.StatusBadRequest, "NISN harus terdiri dari 9 sampai 12 digit")
 				return
 			}
 			query := url.Values{
@@ -540,6 +541,34 @@ func main() {
 				js(w, http.StatusOK, map[string]bool{"ok": true})
 			})
 
+			// Upload foto kandidat: body = bytes gambar mentah (JPEG/PNG/WebP, maks 2 MB).
+			r.Post("/upload", func(w http.ResponseWriter, r *http.Request) {
+				r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+				data, err := io.ReadAll(r.Body)
+				if err != nil || len(data) == 0 {
+					fail(w, http.StatusRequestEntityTooLarge, "Foto kosong atau lebih dari 2 MB")
+					return
+				}
+				contentType := http.DetectContentType(data)
+				ext := map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[contentType]
+				if ext == "" {
+					fail(w, http.StatusUnsupportedMediaType, "Format foto harus JPG, PNG, atau WebP")
+					return
+				}
+				id := make([]byte, 12)
+				if _, err := rand.Read(id); err != nil {
+					fail(w, http.StatusInternalServerError, "Gagal membuat nama file")
+					return
+				}
+				photoURL, err := store.uploadObject(r.Context(), "candidate-photos", hex.EncodeToString(id)+"."+ext, contentType, data)
+				if err != nil {
+					log.Printf("gagal upload foto kandidat: %v", err)
+					fail(w, http.StatusInternalServerError, "Gagal mengunggah foto. Pastikan bucket candidate-photos sudah dibuat (jalankan schema.sql)")
+					return
+				}
+				js(w, http.StatusOK, map[string]string{"url": photoURL})
+			})
+
 			r.Post("/candidates", func(w http.ResponseWriter, r *http.Request) {
 				var candidate Candidate
 				if !decodeJSON(w, r, &candidate) {
@@ -547,6 +576,12 @@ func main() {
 				}
 				candidate.Name = strings.TrimSpace(candidate.Name)
 				candidate.Vision = strings.TrimSpace(candidate.Vision)
+				candidate.PhotoURL = strings.TrimSpace(candidate.PhotoURL)
+				if candidate.PhotoURL != "" && (len(candidate.PhotoURL) > 1000 ||
+					!(strings.HasPrefix(candidate.PhotoURL, "https://") || strings.HasPrefix(candidate.PhotoURL, "/"))) {
+					fail(w, http.StatusBadRequest, "URL foto harus diawali https:// atau /")
+					return
+				}
 				if candidate.Number < 1 || candidate.Name == "" || candidate.Vision == "" ||
 					len(candidate.Name) > 200 || len(candidate.Vision) > 5000 {
 					fail(w, http.StatusBadRequest, "Nomor, nama, dan visi kandidat harus diisi dengan benar")

@@ -10,8 +10,12 @@ CREATE TABLE IF NOT EXISTS public.candidates (
     id BIGSERIAL PRIMARY KEY,
     number INTEGER NOT NULL UNIQUE CHECK (number > 0),
     name TEXT NOT NULL,
-    vision TEXT NOT NULL
+    vision TEXT NOT NULL,
+    photo_url TEXT NOT NULL DEFAULT ''
 );
+
+-- Untuk database yang sudah ada: tambahkan kolom foto kandidat
+ALTER TABLE public.candidates ADD COLUMN IF NOT EXISTS photo_url TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS public.candidate_votes (
     candidate_id BIGINT PRIMARY KEY,
@@ -92,6 +96,7 @@ AS $$
                     'number', c.number,
                     'name', c.name,
                     'vision', c.vision,
+                    'photo_url', c.photo_url,
                     'votes', COALESCE(cv.votes, 0)
                 )
                 ORDER BY c.number, c.id
