@@ -58,7 +58,7 @@ var (
 	mu       sync.Mutex
 	sessions = map[string]string{}
 	admins   = map[string]time.Time{}
-	nisnRe   = regexp.MustCompile(`^\d{5,12}$`)
+	nisnRe   = regexp.MustCompile(`^\d{9,12}$`)
 )
 
 func env(key, fallback string) string {
