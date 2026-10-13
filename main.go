@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -54,11 +53,8 @@ type Stats struct {
 }
 
 var (
-	store    *supabaseStore
-	mu       sync.Mutex
-	sessions = map[string]string{}
-	admins   = map[string]time.Time{}
-	nisnRe   = regexp.MustCompile(`^\d{9,12}$`)
+	store  *supabaseStore
+	nisnRe = regexp.MustCompile(`^\d{9,12}$`)
 )
 
 func env(key, fallback string) string {
@@ -131,9 +127,12 @@ type ctxKey struct{}
 
 func voterAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		nisn, ok := sessions[bearer(r)]
-		mu.Unlock()
+		nisn, ok, err := findSession(r.Context(), sessionKindVoter, bearer(r))
+		if err != nil {
+			log.Printf("gagal memeriksa sesi pemilih di Supabase: %v", err)
+			fail(w, http.StatusServiceUnavailable, "Server sedang sibuk, coba lagi sebentar")
+			return
+		}
 		if !ok {
 			fail(w, http.StatusUnauthorized, "Sesi tidak valid, silakan masuk lagi")
 			return
@@ -144,14 +143,12 @@ func voterAuth(next http.Handler) http.Handler {
 
 func adminAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		key := bearer(r)
-		expiresAt, found := admins[key]
-		ok := found && time.Now().Before(expiresAt)
-		if found && !ok {
-			delete(admins, key)
+		_, ok, err := findSession(r.Context(), sessionKindAdmin, bearer(r))
+		if err != nil {
+			log.Printf("gagal memeriksa sesi admin di Supabase: %v", err)
+			fail(w, http.StatusServiceUnavailable, "Server sedang sibuk, coba lagi sebentar")
+			return
 		}
-		mu.Unlock()
 		if !ok {
 			fail(w, http.StatusUnauthorized, "Akses admin ditolak")
 			return
@@ -304,14 +301,15 @@ func main() {
 				fail(w, http.StatusLocked, "blocked")
 				return
 			}
-			key, err := token()
+			if err := purgeExpiredSessions(r.Context()); err != nil {
+				log.Printf("gagal membersihkan sesi kedaluwarsa: %v", err)
+			}
+			key, err := createSession(r.Context(), sessionKindVoter, in.NISN, voterSessionTTL)
 			if err != nil {
+				log.Printf("gagal membuat sesi pemilih: %v", err)
 				fail(w, http.StatusInternalServerError, "Gagal membuat sesi")
 				return
 			}
-			mu.Lock()
-			sessions[key] = in.NISN
-			mu.Unlock()
 			js(w, http.StatusOK, map[string]any{"token": key, "voted": voters[0].Voted})
 		})
 
@@ -376,9 +374,9 @@ func main() {
 					fail(w, http.StatusForbidden, "Kamu tidak dapat memilih")
 					return
 				}
-				mu.Lock()
-				delete(sessions, bearer(r))
-				mu.Unlock()
+				if err := deleteSession(r.Context(), bearer(r)); err != nil {
+					log.Printf("gagal menghapus sesi setelah voting: %v", err)
+				}
 				go store.sendSheetVote(candidate.Name)
 				js(w, http.StatusOK, map[string]bool{"ok": true})
 			})
@@ -404,9 +402,9 @@ func main() {
 					fail(w, http.StatusInternalServerError, "Gagal menyimpan status blokir")
 					return
 				}
-				mu.Lock()
-				delete(sessions, bearer(r))
-				mu.Unlock()
+				if err := deleteSession(r.Context(), bearer(r)); err != nil {
+					log.Printf("gagal menghapus sesi setelah pelanggaran: %v", err)
+				}
 				js(w, http.StatusOK, map[string]bool{"ok": true})
 			})
 		})
@@ -422,14 +420,15 @@ func main() {
 				fail(w, http.StatusUnauthorized, "Password salah")
 				return
 			}
-			key, err := token()
+			if err := purgeExpiredSessions(r.Context()); err != nil {
+				log.Printf("gagal membersihkan sesi kedaluwarsa: %v", err)
+			}
+			key, err := createSession(r.Context(), sessionKindAdmin, "", adminSessionTTL)
 			if err != nil {
+				log.Printf("gagal membuat sesi admin: %v", err)
 				fail(w, http.StatusInternalServerError, "Gagal membuat sesi admin")
 				return
 			}
-			mu.Lock()
-			admins[key] = time.Now().Add(8 * time.Hour)
-			mu.Unlock()
 			js(w, http.StatusOK, map[string]string{"token": key})
 		})
 
